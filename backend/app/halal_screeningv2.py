@@ -37,8 +37,8 @@ def safe_lookup(df, keys):
 def fetch_financial_statements(ticker):
     # Get Companys financial data #
     data = yf.Ticker(ticker)
-    balance = data.quarterly_balance_sheet  # quarterly data
-    income = data.quarterly_financials      # quarterly income statement
+    balance = data.balance_sheet  # quarterly data
+    income = data.financials      # quarterly income statement
 
     # get the most recent quarter (first column)
     latest_date = balance.columns[0]
@@ -57,17 +57,32 @@ def fetch_financial_statements(ticker):
         "revenue": safe_lookup(income, ["Total Revenue", "Revenue"]),
         "interest_income": safe_lookup(income, ["Interest Income", "Net Interest Income"])
     }
+    print({ticker}, financials)
     return financials
 
-def calculate_ratios(financials):
-    ### Calculates Stock Ratio according to AAOIFI Screening rules #
-    ratios = {}
-    assets = financials.get("total_assets") or 0
+def get_avg_market_cap(ticker_symbol: str) -> float:
+    ticker = yf.Ticker(ticker_symbol)
 
-    if assets > 0:
-        ratios["debt_ratio"] = (financials.get("total_debt") or 0) / assets
-        ratios["cash_ratio"] = (financials.get("cash_total") or 0) / assets
-        ratios["receivables_ratio"] = (financials.get("receivables") or 0) / assets
+    try:
+        hist = ticker.history(period="1y", interval="1d")
+        avg_price = hist["Close"].mean()
+        shares_outstanding = ticker.info.get("sharesOutstanding", 0)
+
+        if avg_price is None or shares_outstanding == 0:
+            return None
+
+        return avg_price * shares_outstanding
+    except:
+        return None
+
+
+def calculate_ratios(financials, avg_market_cap):
+    ratios = {}
+
+    if avg_market_cap and avg_market_cap > 0:
+        ratios["debt_ratio"] = (financials.get("total_debt") or 0) / avg_market_cap
+        ratios["cash_ratio"] = (financials.get("cash_total") or 0) / avg_market_cap
+        ratios["receivables_ratio"] = (financials.get("receivables") or 0) / avg_market_cap
     else:
         ratios["debt_ratio"] = None
         ratios["cash_ratio"] = None
@@ -81,12 +96,14 @@ def calculate_ratios(financials):
 
     return ratios
 
+
 def screen_stock(ticker):
     # This screens the stock and determines its compliance simply giving it either halal, doubtful or haraam and then
     # it grades it from A+, A, A-, B+, B, B-, C+, C and C- in terms of accuracy
     profile = fetch_company_profile(ticker)
     financials = fetch_financial_statements(ticker)
-    ratios = calculate_ratios(financials)
+    avg_market_cap = get_avg_market_cap(ticker)
+    ratios = calculate_ratios(financials, avg_market_cap)
 
     compliance = "Halal"
     reasons = []
@@ -102,7 +119,7 @@ def screen_stock(ticker):
         }
 
     # Industry-based screen (auto haram)
-    haram_industries = ["Bank", "Insurance", "Financial", "REIT"]
+    haram_industries = []
     if profile.get("sector") and any(word in profile["sector"] for word in haram_industries):
         compliance = "Haram"
         reasons.append(f"Industry = {profile['sector']} (prohibited)")

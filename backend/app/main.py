@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from app.halal_screening import screen_halal_stocks, screen_halal_stocks_batch
 from app.db import init_db
+from app.halal_screenerAI import screen_stock
 
 app = FastAPI()
 init_db()
@@ -17,6 +18,11 @@ app.add_middleware(
 @app.get("/")
 def root():
     return {"message": "Halal Screener API"}
+
+@app.get("/screen/{ticker}")
+def screen_endpoint(ticker: str):
+    result = screen_stock(ticker)
+    return result
 
 @app.get("/stocks")
 def get_stock(ticker: str=Query(..., min_length=1)):
