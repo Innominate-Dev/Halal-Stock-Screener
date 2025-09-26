@@ -1,0 +1,235 @@
+# halal_screening.py
+import requests
+import os
+import yfinance as yf
+from dotenv import load_dotenv
+from nlp_model import predict
+
+load_dotenv()
+
+NEWS_API_KEY = os.getenv("NEWS_API_KEY")
+
+def fetch_company_profile(ticker):
+    # Get Companies Profile #
+    data = yf.Ticker(ticker)
+    info = data.info
+   
+    if not info or "longName" not in info:
+        return{"error:" f"Invalid ticker: {ticker}"}
+
+    profile = {
+        "ticker": ticker,
+        "name": info.get("longName"),
+        "sector": info.get("industry"),
+        "summary": info.get("longBusinessSummary")
+    }
+    return profile
+
+def safe_lookup(df, keys):
+    """
+    Try to get the first matching key from a DataFrame row index.
+    Returns None if not found.
+    """
+    for key in keys:
+        if key in df.index:
+            return df.loc[key].iloc[0]
+    return None
+
+def fetch_financial_statements(ticker):
+    # Get Companys financial data #
+    data = yf.Ticker(ticker)
+    balance = data.balance_sheet  # quarterly data
+    income = data.financials      # quarterly income statement
+
+    # get the most recent quarter (first column)
+    latest_date = balance.columns[0]
+
+    financials = {
+        "date": str(latest_date.date()) if latest_date is not None else None,
+        "total_assets": safe_lookup(balance, ["Total Assets"]),
+        "total_debt": safe_lookup(balance, ["Total Debt"]),
+        "cash_total": safe_lookup(balance, [
+            "Cash Cash Equivalents And Short Term Investments",
+            "Cash And Cash Equivalents",
+            "Cash Equivalents",
+            "Other Short Term Investments"
+        ]),
+        "receivables": safe_lookup(balance, ["Total Receivables Net", "Receivables"]),
+        "revenue": safe_lookup(income, ["Total Revenue", "Revenue"]),
+        "interest_income": safe_lookup(income, ["Interest Income", "Net Interest Income"])
+    }
+    print({ticker}, financials)
+    return financials
+
+def get_avg_market_cap(ticker_symbol: str) -> float:
+    ticker = yf.Ticker(ticker_symbol)
+
+    try:
+        hist = ticker.history(period="1y", interval="1d")
+        avg_price = hist["Close"].mean()
+        shares_outstanding = ticker.info.get("sharesOutstanding", 0)
+
+        if avg_price is None or shares_outstanding == 0:
+            return None
+
+        return avg_price * shares_outstanding
+    except:
+        return None
+
+
+def calculate_ratios(financials, avg_market_cap):
+    ratios = {}
+
+    if avg_market_cap and avg_market_cap > 0:
+        ratios["debt_ratio"] = (financials.get("total_debt") or 0) / avg_market_cap
+        ratios["cash_ratio"] = (financials.get("cash_total") or 0) / avg_market_cap
+        ratios["receivables_ratio"] = (financials.get("receivables") or 0) / avg_market_cap
+    else:
+        ratios["debt_ratio"] = None
+        ratios["cash_ratio"] = None
+        ratios["receivables_ratio"] = None
+
+    revenue = financials.get("revenue") or 0
+    if revenue > 0 and financials.get("interest_income") is not None:
+        ratios["interest_income_ratio"] = financials["interest_income"] / revenue
+    else:
+        ratios["interest_income_ratio"] = None
+
+    return ratios
+
+
+def screen_stock(ticker):
+    # This screens the stock and determines its compliance simply giving it either halal, doubtful or haraam and then
+    # it grades it from A+, A, A-, B+, B, B-, C+, C and C- in terms of accuracy
+    profile = fetch_company_profile(ticker)
+    financials = fetch_financial_statements(ticker)
+    avg_market_cap = get_avg_market_cap(ticker)
+    ratios = calculate_ratios(financials, avg_market_cap)
+
+    compliance = "Halal"
+    reasons = []
+    missing_data = False
+
+    business_desc = profile.get("summary")
+    nlp_result = predict(business_desc)
+
+    # Preventing any non existing tickers breaking the system
+    if "error" in profile:
+        return {
+        "ticker": ticker,
+        "halal": None,
+        "grade": None,
+        "reasons": [profile["error"]]
+        }
+
+    # # Industry-based screen (auto haram)
+    # haram_industries = []
+    # if profile.get("sector") and any(word in profile["sector"] for word in haram_industries):
+    #     compliance = "Haram"
+    #     reasons.append(f"Industry = {profile['sector']} (prohibited)")
+    #     return {
+    #         "ticker": ticker,
+    #         "compliance": compliance,
+    #         "grade": "A+",
+    #         "reasons": reasons,
+    #         "ratios": ratios
+    #     }
+
+    # Ratio checks (According to AAOIFI standards)
+    if ratios["debt_ratio"] is None:
+        missing_data = True
+        reasons.append("Debt ratio missing")
+    elif ratios["debt_ratio"] >= 0.33:
+        compliance = "Haram"
+        reasons.append(f"Debt ratio {ratios['debt_ratio']:.2%} ≥ 33%")
+
+    if ratios["cash_ratio"] is None:
+        missing_data = True
+        reasons.append("Cash ratio missing")
+    elif ratios["cash_ratio"] >= 0.33:
+        compliance = "Haram"
+        reasons.append(f"Cash ratio {ratios['cash_ratio']:.2%} ≥ 33%")
+
+    if ratios["receivables_ratio"] is None:
+        missing_data = True
+        reasons.append("Receivables ratio missing")
+    elif ratios["receivables_ratio"] >= 0.33:
+        compliance = "Haram"
+        reasons.append(f"Receivables ratio {ratios['receivables_ratio']:.2%} ≥ 33%")
+
+    if ratios["interest_income_ratio"] is None:
+        missing_data = True
+        reasons.append("Interest income ratio missing")
+    elif ratios["interest_income_ratio"] >= 0.05:
+        compliance = "Haram"
+        reasons.append(f"Interest income ratio {ratios['interest_income_ratio']:.2%} ≥ 5%")
+
+    # If missing key data → Doubtful
+    if compliance == "Halal" and missing_data:
+        compliance = "Doubtful"
+
+    if nlp_result == "not halal":
+        compliance = "Haram"
+    elif nlp_result == "doubtful":
+        compliance = "Doubtful"
+
+    # Assign grade (based on available ratios)
+    grade = grade_stock(ratios)
+
+    return {
+        "ticker": ticker,
+        "compliance": compliance,
+        "grade": grade,
+        "reasons": reasons,
+        "ratios": ratios
+    }
+
+
+def grade_stock(ratios):
+    score = 0
+
+    # Debt
+    d = ratios.get("debt_ratio")
+    if d is not None:
+        if d < 0.10: score += 3
+        elif d < 0.20: score += 2
+        elif d < 0.33: score += 1
+
+    # Cash
+    c = ratios.get("cash_ratio")
+    if c is not None:
+        if c < 0.10: score += 3
+        elif c < 0.20: score += 2
+        elif c < 0.33: score += 1
+
+    # Receivables
+    r = ratios.get("receivables_ratio")
+    if r is not None:
+        if r < 0.10: score += 3
+        elif r < 0.20: score += 2
+        elif r < 0.33: score += 1
+
+    # Interest Income
+    i = ratios.get("interest_income_ratio")
+    if i is not None:
+        if i < 0.01: score += 3
+        elif i < 0.03: score += 2
+        elif i < 0.05: score += 1
+
+    # Map score → letter grade
+    if score >= 11: return "A+"
+    elif score >= 9: return "A"
+    elif score == 8: return "A-"
+    elif score == 7: return "B+"
+    elif score == 6: return "B"
+    elif score == 5: return "B-"
+    elif score == 4: return "C+"
+    elif score == 3: return "C"
+    else: return "C-"
+
+
+
+if __name__ == "__main__":
+    test_tickers = input("Enter a ticker: ").split()
+    for t in test_tickers:
+        print(screen_stock(t))

@@ -1,0 +1,12 @@
+# Model and tokenizer files
+*.pt
+*.bin
+*.safetensors
+*.json
+special_tokens_map.json
+tokenizer_config.json
+vocab.txt
+trainer_state.json
+optimizer.pt
+scheduler.pt
+/results

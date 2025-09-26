@@ -65,13 +65,17 @@ def fetch_financial_statements(ticker):
     bs = bs_data[0]
     inc = inc_data[0]
 
+    print(bs.get("date", 0))
+
     return {
+        "date": bs.get("date", 0),
         "totalDebt": bs.get("totalDebt", 0),
         "cashAndCashEquivalents": bs.get("cashAndCashEquivalents", 0),
         "shortTermInvestments": bs.get("shortTermInvestments", 0),
         "interestIncome": inc.get("interestIncome", 0),
         "totalRevenue": inc.get("revenue", 0),
     }
+
 
 def apply_aaoifi_screening(financials, market_cap):
     reasons = []
@@ -134,9 +138,17 @@ def evaluate_ethical_risk(news_articles):
     else:
         return "Halal ✅", "No concerning news found."
 
+def screen_halal_stocks_batch(tickers):
+    ##Create a list of tickers if a list has been provided
+    results = []
+    for ticker in tickers:
+        result = screen_halal_stocks(ticker)
+        results.append(result)
+
+    return results
+
 def screen_halal_stocks(ticker):
     try:
-        # Early exit if stock is already screened
         cached = get_cached_stock(ticker)
         if cached:
             return {
@@ -145,12 +157,26 @@ def screen_halal_stocks(ticker):
                 "reason": cached.reason,
                 "companyName": cached.company_name,
             }
+
         profile = fetch_company_profile(ticker)
         financials = fetch_financial_statements(ticker)
         market_cap = profile.get("marketCap") or 0
 
+        # Business sector check
         haram_sector, sector_reason = check_business_sector(profile.get("sector", ""), profile.get("industry", ""))
         if haram_sector:
+            save_to_db(
+                ticker=ticker,
+                company_name=profile.get("companyName"),
+                status="Haram ❌",
+                reason=sector_reason,
+                sector=profile.get("sector"),
+                industry=profile.get("industry"),
+                market_cap=market_cap,
+                financial_ratios=None,
+                news_flag="Haram",
+                news_snippet=sector_reason
+            )
             return {
                 "ticker": ticker,
                 "status": "Haram ❌",
@@ -158,8 +184,21 @@ def screen_halal_stocks(ticker):
                 "companyName": profile.get("companyName"),
             }
 
+        # AAOIFI financial screening
         haram_financial, financial_reasons = apply_aaoifi_screening(financials, market_cap)
         if haram_financial:
+            save_to_db(
+                ticker=ticker,
+                company_name=profile.get("companyName"),
+                status="Haram ❌",
+                reason="; ".join(financial_reasons),
+                sector=profile.get("sector"),
+                industry=profile.get("industry"),
+                market_cap=market_cap,
+                financial_ratios=financials,
+                news_flag="Haram",
+                news_snippet="; ".join(financial_reasons),
+            )
             return {
                 "ticker": ticker,
                 "status": "Haram ❌",
@@ -167,8 +206,22 @@ def screen_halal_stocks(ticker):
                 "companyName": profile.get("companyName"),
             }
 
+        # News screening
         news_results = fetch_company_news(profile.get("companyName"))
         ethical_status, ethical_reason = evaluate_ethical_risk(news_results)
+
+        save_to_db(
+            ticker=ticker,
+            company_name=profile.get("companyName"),
+            status=ethical_status,
+            reason=ethical_reason,
+            sector=profile.get("sector"),
+            industry=profile.get("industry"),
+            market_cap=market_cap,
+            financial_ratios=financials,
+            news_flag=ethical_status,
+            news_snippet=ethical_reason,
+        )
 
         return {
             "ticker": ticker,
@@ -185,13 +238,25 @@ def screen_halal_stocks(ticker):
             "companyName": None,
         }
 
+
 if __name__ == "__main__":
     test_tickers = input("Enter a ticker: ").split()
     print(test_tickers)
     
     for tk in test_tickers:
         result = screen_halal_stocks(tk)
-        save_to_db(result["ticker"], result["companyName"], result["status"], result["reason"])
+        save_to_db(
+            ticker=result["ticker"],
+            company_name=result["companyName"],
+            status=result["status"],
+            reason=result["reason"],
+            sector=result.get("sector"),
+            industry=result.get("industry"),
+            market_cap=result.get("marketCap"),
+            financial_ratios=result.get("financialRatios"),
+            news_flag=result.get("newsFlag"),
+            news_snippet=result.get("newsSnippet"),
+        )
         
         print(f"{result['ticker']} ({result['companyName']}): {result['status']}")
         print(f"Reason: {result['reason']}")
