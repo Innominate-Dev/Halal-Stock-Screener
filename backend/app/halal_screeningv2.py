@@ -3,6 +3,7 @@ import requests
 import os
 import yfinance as yf
 from dotenv import load_dotenv
+from nlp_model import predict
 
 load_dotenv()
 
@@ -109,6 +110,9 @@ def screen_stock(ticker):
     reasons = []
     missing_data = False
 
+    business_desc = profile.get("summary")
+    nlp_result = predict(business_desc)
+
     # Preventing any non existing tickers breaking the system
     if "error" in profile:
         return {
@@ -118,18 +122,18 @@ def screen_stock(ticker):
         "reasons": [profile["error"]]
         }
 
-    # Industry-based screen (auto haram)
-    haram_industries = []
-    if profile.get("sector") and any(word in profile["sector"] for word in haram_industries):
-        compliance = "Haram"
-        reasons.append(f"Industry = {profile['sector']} (prohibited)")
-        return {
-            "ticker": ticker,
-            "compliance": compliance,
-            "grade": "A+",
-            "reasons": reasons,
-            "ratios": ratios
-        }
+    # # Industry-based screen (auto haram)
+    # haram_industries = []
+    # if profile.get("sector") and any(word in profile["sector"] for word in haram_industries):
+    #     compliance = "Haram"
+    #     reasons.append(f"Industry = {profile['sector']} (prohibited)")
+    #     return {
+    #         "ticker": ticker,
+    #         "compliance": compliance,
+    #         "grade": "A+",
+    #         "reasons": reasons,
+    #         "ratios": ratios
+    #     }
 
     # Ratio checks (According to AAOIFI standards)
     if ratios["debt_ratio"] is None:
@@ -162,6 +166,11 @@ def screen_stock(ticker):
 
     # If missing key data → Doubtful
     if compliance == "Halal" and missing_data:
+        compliance = "Doubtful"
+
+    if nlp_result == "not halal":
+        compliance = "Haram"
+    elif nlp_result == "doubtful":
         compliance = "Doubtful"
 
     # Assign grade (based on available ratios)
