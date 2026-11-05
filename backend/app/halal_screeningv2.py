@@ -3,7 +3,7 @@ import requests
 import os
 import yfinance as yf
 from dotenv import load_dotenv
-from nlp_model import predict
+from app.nlp_model import predict
 
 load_dotenv()
 

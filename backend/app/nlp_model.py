@@ -4,7 +4,10 @@ import os
 from dotenv import load_dotenv
 
 load_dotenv()
-model_path = os.getenv("MODEL_PATH")
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))  # this goes up from app/ to backend/
+PROJECT_ROOT = os.path.dirname(BASE_DIR)  # this goes up one more level to project root
+model = os.getenv("MODEL")
+model_path = os.path.join(PROJECT_ROOT, model)
 
 # Loading my trained model and its tokenizer
 model = BertForSequenceClassification.from_pretrained(model_path)
